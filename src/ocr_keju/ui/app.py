@@ -44,6 +44,7 @@ class DesktopController(QObject):
         self.selector: RegionSelector | None = None
         self.hotkey = GlobalHotkeyManager(self.preferences.hotkey, self)
         self._busy = False
+        self._active_worker: Worker | None = None
         self._bind()
         self._refresh_status()
         self.hotkey.start()
@@ -100,10 +101,11 @@ class DesktopController(QObject):
         worker = Worker(lambda: self.pipeline.recognize(image, threshold))
         worker.signals.result.connect(self._recognition_done)
         worker.signals.error.connect(self._worker_error)
-        worker.signals.finished.connect(lambda: self._set_busy(False, "就绪"))
+        self._active_worker = worker
         self.thread_pool.start(worker)
 
     def _recognition_done(self, value: object) -> None:
+        self._finish_task()
         if not isinstance(value, RecognitionOutcome):
             self.window.show_status("识别任务返回了未知结果")
             return
@@ -130,10 +132,11 @@ class DesktopController(QObject):
         worker = Worker(do_sync)
         worker.signals.result.connect(self._sync_done)
         worker.signals.error.connect(self._worker_error)
-        worker.signals.finished.connect(lambda: self._set_busy(False, "就绪"))
+        self._active_worker = worker
         self.thread_pool.start(worker)
 
     def _sync_done(self, value: object) -> None:
+        self._finish_task()
         if not isinstance(value, SyncReport):
             self.window.show_status("同步任务返回了未知结果")
             return
@@ -143,8 +146,13 @@ class DesktopController(QObject):
         )
 
     def _worker_error(self, message: str) -> None:
+        self._finish_task()
         self.window.show_status(f"任务失败：{message}")
         QMessageBox.warning(self.window, "OCR 科举助手", message)
+
+    def _finish_task(self) -> None:
+        self._active_worker = None
+        self._set_busy(False, "就绪")
 
     def _set_busy(self, busy: bool, message: str) -> None:
         self._busy = busy
