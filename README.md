@@ -127,3 +127,38 @@ uv run rapidocr check
 ```
 
 项目包含 API 解析、标准化、SQLite、本地缓存、模糊匹配、同步、配置持久化和 OCR 结果转换测试。
+
+## 自动发布 Release
+
+仓库包含 `.github/workflows/release.yml`。推送 `v*` 标签后，GitHub Actions 会在 Windows Runner 上自动：
+
+1. 安装 Python 3.13 和 `uv`。
+2. 按 `uv.lock` 安装依赖。
+3. 执行测试与 `rapidocr check`。
+4. 使用 PyInstaller 构建 Windows x64 程序。
+5. 将完整 `dist/ocr-keju` 目录压缩成 ZIP。
+6. 创建 GitHub Release 并上传 ZIP。
+
+例如发布测试版：
+
+```powershell
+git tag v0.1.0-beta.1
+git push origin v0.1.0-beta.1
+```
+
+标签名包含 `-` 时（例如 `beta`、`rc`）会自动标记为 Pre-release。
+
+正式版：
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+生成的附件命名类似：
+
+```text
+jx3-ocr-keju-v0.1.0-windows-x64.zip
+```
+
+也可以在 GitHub Actions 页面手动运行工作流进行构建验证；手动运行只上传 Actions Artifact，不自动创建 Release。

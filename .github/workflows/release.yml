@@ -1,0 +1,71 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and release Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          python-version: "3.13"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: uv sync --extra dev --frozen
+
+      - name: Run tests
+        shell: pwsh
+        run: uv run pytest
+
+      - name: Check RapidOCR
+        shell: pwsh
+        run: uv run rapidocr check
+
+      - name: Build Windows package
+        shell: pwsh
+        run: uv run pyinstaller --noconfirm --clean ocr-keju.spec
+
+      - name: Package ZIP
+        id: package
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ([string]::IsNullOrWhiteSpace($tag) -or $tag -eq "main") {
+            $tag = "manual-${{ github.run_number }}"
+          }
+          $archive = "jx3-ocr-keju-$tag-windows-x64.zip"
+          Compress-Archive -Path ".\dist\ocr-keju\*" -DestinationPath ".\dist\$archive" -Force
+          "archive=$archive" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "path=dist/$archive" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.archive }}
+          path: ${{ steps.package.outputs.path }}
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: ${{ steps.package.outputs.path }}
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
