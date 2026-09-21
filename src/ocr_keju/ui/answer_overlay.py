@@ -5,7 +5,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from ocr_keju.capture import CaptureRegion
-from ocr_keju.pipeline import RecognitionOutcome
+from ocr_keju.pipeline import AnswerBox, RecognitionOutcome
 
 
 class AnswerOverlay(QWidget):
@@ -29,6 +29,15 @@ class AnswerOverlay(QWidget):
         if outcome.match is None or not outcome.answer_boxes:
             self.hide()
             return
+        self.show_boxes(outcome.answer_boxes, region)
+
+    def show_box(self, box: AnswerBox, region: CaptureRegion) -> None:
+        self.show_boxes((box,), region)
+
+    def show_boxes(self, boxes: tuple[AnswerBox, ...], region: CaptureRegion) -> None:
+        if not boxes:
+            self.hide()
+            return
 
         global_rects = [
             QRect(
@@ -37,7 +46,7 @@ class AnswerOverlay(QWidget):
                 box.width,
                 box.height,
             )
-            for box in outcome.answer_boxes
+            for box in boxes
         ]
         bounds = global_rects[0]
         for rect in global_rects[1:]:

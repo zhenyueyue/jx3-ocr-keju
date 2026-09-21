@@ -12,8 +12,10 @@ from ocr_keju.capture.change_detector import frame_difference, frame_signature
 from ocr_keju.capture.qt_capture import QtScreenCapture, ScreenCaptureError
 from ocr_keju.config import Settings
 from ocr_keju.database import QuestionRepository
+from ocr_keju.models import ExamQuestion
 from ocr_keju.ocr import RapidOcrEngine
-from ocr_keju.pipeline import RecognitionOutcome, RecognitionPipeline
+from ocr_keju.pipeline import PendingQuestion, RecognitionOutcome, RecognitionPipeline
+from ocr_keju.question import normalize_question
 from ocr_keju.preferences import PreferencesStore
 from ocr_keju.sync import QuestionBankSyncService, SyncReport
 from ocr_keju.ui.answer_overlay import AnswerOverlay
@@ -57,6 +59,7 @@ class DesktopController(QObject):
         self._last_signature: np.ndarray | None = None
         self._pending_frame: np.ndarray | None = None
         self._question_watch_height: int | None = None
+        self._pending_question: PendingQuestion | None = None
 
         self._monitor_timer = QTimer(self)
         self._monitor_timer.setInterval(MONITOR_INTERVAL_MS)
@@ -86,6 +89,7 @@ class DesktopController(QObject):
         self.window.monitor_toggle_requested.connect(self.toggle_monitoring)
         self.window.recognize_requested.connect(self.recognize)
         self.window.sync_requested.connect(self.sync_bank)
+        self.window.pending_answer_selected.connect(self.save_pending_answer)
         self.window.closing.connect(self.shutdown)
 
     def _refresh_status(self) -> None:
@@ -113,6 +117,7 @@ class DesktopController(QObject):
         self._last_signature = None
         self._pending_frame = None
         self._question_watch_height = None
+        self._clear_pending_question()
         self.overlay.clear()
         self.window.set_region(region)
         self.window.set_monitoring(True, True)
@@ -209,6 +214,7 @@ class DesktopController(QObject):
             return
         self._recognition_running = True
         self._pending_frame = image
+        self._clear_pending_question()
         self.window.show_status("正在识别题目并定位正确选项…" if manual else "检测到新题目，正在识别…")
         threshold = self.preferences.local_match_threshold
         worker = Worker(lambda: self.pipeline.recognize(image, threshold))
@@ -228,9 +234,21 @@ class DesktopController(QObject):
         self._finish_recognition()
         self.window.show_outcome(value)
         region = self.preferences.capture_region
+        if value.match is not None:
+            self._clear_pending_question()
+        elif value.pending_question is not None:
+            self._pending_question = value.pending_question
+            self.window.show_pending_question(value.pending_question)
+
         if region is not None and value.answer_boxes:
             self.overlay.show_outcome(value, region)
             self.window.show_status("已识别并框出正确答案 · 实时检测继续运行")
+        elif value.pending_question is not None:
+            if region is not None:
+                self.overlay.show_message(region, "题库未收录 · 在助手中点正确答案")
+            else:
+                self.overlay.clear()
+            self.window.show_status("题库未收录：已提取题目和选项，点正确答案即可补录")
         elif value.warning:
             if region is not None:
                 self.overlay.show_message(region, "已检测新题 · 未定位答案")
@@ -245,6 +263,44 @@ class DesktopController(QObject):
             self.window.show_status("识别完成，但没有定位到屏幕选项")
 
         self.window.set_bank_count(self.repository.count())
+
+    def save_pending_answer(self, answer_index: int) -> None:
+        pending = self._pending_question
+        if pending is None or answer_index < 0 or answer_index >= len(pending.options):
+            self.window.show_status("当前没有可补录的题目")
+            return
+
+        selected = pending.options[answer_index]
+        options = tuple(option.text for option in pending.options)
+        question = ExamQuestion(
+            remote_id=None,
+            title=pending.question,
+            normalized_title=normalize_question(pending.question),
+            options=options,
+            answer_indices=(answer_index,),
+            answer_text=(selected.text,),
+            is_right=True,
+        )
+        try:
+            self.repository.upsert_user_question(question)
+            self.pipeline.refresh_local_index()
+        except Exception as exc:
+            self.window.show_status(f"补录失败：{exc}")
+            QMessageBox.warning(self.window, "OCR 科举助手", f"补录失败：{exc}")
+            return
+
+        region = self.preferences.capture_region
+        if region is not None:
+            self.overlay.show_box(selected.box, region)
+        self.window.show_user_answer_saved(pending.question, selected.text)
+        self.window.set_bank_count(self.repository.count())
+        self.window.clear_pending_question()
+        self._pending_question = None
+        self.window.show_status("已补录到本地题库，以后遇到这道题会自动识别")
+
+    def _clear_pending_question(self) -> None:
+        self._pending_question = None
+        self.window.clear_pending_question()
 
     def _recognition_error(self, message: str) -> None:
         self._finish_recognition()

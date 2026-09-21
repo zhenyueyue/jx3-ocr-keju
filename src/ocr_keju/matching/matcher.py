@@ -26,7 +26,7 @@ class LocalQuestionMatcher:
         self._exact: dict[str, ExamQuestion] = {}
         for question in questions:
             if question.normalized_title:
-                self._exact[question.normalized_title] = question
+                self._exact.setdefault(question.normalized_title, question)
 
     def exact(self, normalized_query: str) -> ExamQuestion | None:
         return self._exact.get(normalized_query)

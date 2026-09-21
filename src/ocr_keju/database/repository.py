@@ -60,6 +60,49 @@ class QuestionRepository:
             )
         return len(rows)
 
+    def upsert_user_question(self, question: ExamQuestion) -> None:
+        if not question.normalized_title:
+            raise ValueError("用户题目不能为空")
+        self.initialize()
+        with self._connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT id FROM questions
+                WHERE source = 'user' AND normalized_title = ?
+                LIMIT 1
+                """,
+                (question.normalized_title,),
+            ).fetchone()
+            values = (
+                question.title,
+                question.normalized_title,
+                json.dumps(question.options, ensure_ascii=False),
+                json.dumps(question.answer_indices),
+                json.dumps(question.answer_text, ensure_ascii=False),
+                None if question.is_right is None else int(question.is_right),
+            )
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO questions (
+                        remote_id, title, normalized_title, options_json,
+                        answer_indices_json, answer_text_json, is_right, source
+                    ) VALUES (NULL, ?, ?, ?, ?, ?, ?, 'user')
+                    """,
+                    values,
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE questions SET
+                        title = ?, normalized_title = ?, options_json = ?,
+                        answer_indices_json = ?, answer_text_json = ?, is_right = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (*values, existing["id"]),
+                )
+
     def find_exact(self, normalized_title: str) -> ExamQuestion | None:
         self.initialize()
         with self._connect() as connection:
@@ -67,7 +110,8 @@ class QuestionRepository:
                 """
                 SELECT * FROM questions
                 WHERE normalized_title = ?
-                ORDER BY updated_at DESC, id DESC
+                ORDER BY CASE WHEN source = 'user' THEN 0 ELSE 1 END,
+                         updated_at DESC, id DESC
                 LIMIT 1
                 """,
                 (normalized_title,),
@@ -84,7 +128,10 @@ class QuestionRepository:
         self.initialize()
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM questions ORDER BY id ASC"
+                """
+                SELECT * FROM questions
+                ORDER BY CASE WHEN source = 'user' THEN 0 ELSE 1 END, id ASC
+                """
             ).fetchall()
         return [self._row_to_question(row) for row in rows]
 

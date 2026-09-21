@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS questions (
 CREATE INDEX IF NOT EXISTS idx_questions_normalized_title
     ON questions(normalized_title);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_user_normalized_title
+    ON questions(normalized_title)
+    WHERE source = 'user';
+
 CREATE TABLE IF NOT EXISTS sync_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,

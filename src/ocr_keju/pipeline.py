@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from threading import Lock
 
 import numpy as np
@@ -28,6 +29,19 @@ class AnswerBox:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingOption:
+    text: str
+    display_text: str
+    box: AnswerBox
+
+
+@dataclass(frozen=True, slots=True)
+class PendingQuestion:
+    question: str
+    options: tuple[PendingOption, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RecognitionOutcome:
     ocr: OcrResult
     match: SearchResult | None
@@ -35,6 +49,7 @@ class RecognitionOutcome:
     answer_boxes: tuple[AnswerBox, ...] = ()
     detected_question: str = ""
     question_watch_height: int = 0
+    pending_question: PendingQuestion | None = None
 
 
 class RecognitionPipeline:
@@ -103,6 +118,15 @@ class RecognitionPipeline:
             scale_y,
             original_height,
         )
+        pending_question = self._build_pending_question(
+            ocr,
+            resolution.raw_question,
+            resolution.question_line_count,
+            scale_x,
+            scale_y,
+            original_width,
+            original_height,
+        )
 
         if match is None and resolution.raw_question:
             try:
@@ -127,6 +151,7 @@ class RecognitionPipeline:
                     warning=f"本地未达到匹配阈值，远端查询失败：{exc}",
                     detected_question=resolution.raw_question,
                     question_watch_height=question_watch_height,
+                    pending_question=pending_question,
                 )
 
         if match is None:
@@ -136,6 +161,7 @@ class RecognitionPipeline:
                 warning="未找到匹配题目",
                 detected_question=resolution.raw_question,
                 question_watch_height=question_watch_height,
+                pending_question=pending_question,
             )
 
         answer_boxes = self._find_answer_boxes(
@@ -156,6 +182,59 @@ class RecognitionPipeline:
             detected_question=resolution.raw_question,
             question_watch_height=question_watch_height,
         )
+
+    @staticmethod
+    def _strip_option_prefix(text: str) -> str:
+        value = re.sub(
+            r"^\s*(?:[A-Ha-h]|[1-8])\s*[\.．、:：\)）\-]\s*",
+            "",
+            text,
+        ).strip()
+        return value or text.strip()
+
+    @classmethod
+    def _build_pending_question(
+        cls,
+        ocr: OcrResult,
+        raw_question: str,
+        question_line_count: int,
+        scale_x: float,
+        scale_y: float,
+        original_width: int,
+        original_height: int,
+    ) -> PendingQuestion | None:
+        question = raw_question.strip()
+        if not question:
+            return None
+
+        pending_options: list[PendingOption] = []
+        for line in ocr.lines[max(0, question_line_count):]:
+            if not line.text.strip() or not line.box:
+                continue
+            xs = [point[0] / max(scale_x, 1e-6) for point in line.box]
+            ys = [point[1] / max(scale_y, 1e-6) for point in line.box]
+            left = max(0, int(min(xs)) - 10)
+            top = max(0, int(min(ys)) - 7)
+            right = min(original_width, int(max(xs)) + 10)
+            bottom = min(original_height, int(max(ys)) + 7)
+            pending_options.append(
+                PendingOption(
+                    text=cls._strip_option_prefix(line.text),
+                    display_text=line.text.strip(),
+                    box=AnswerBox(
+                        left=left,
+                        top=top,
+                        width=max(1, right - left),
+                        height=max(1, bottom - top),
+                        text=line.text.strip(),
+                        confidence=line.score,
+                    ),
+                )
+            )
+
+        if len(pending_options) < 2:
+            return None
+        return PendingQuestion(question=question, options=tuple(pending_options))
 
     @staticmethod
     def _question_watch_height(

@@ -51,3 +51,23 @@ def test_pipeline_locates_correct_answer_box_from_full_region(tmp_path, monkeypa
     assert box.top < 100
     assert box.confidence >= 0.9
     assert 50 < outcome.question_watch_height < 90
+
+
+def test_pipeline_builds_pending_question_from_ocr_lines() -> None:
+    ocr = FakeOcrEngine().recognize(np.zeros((300, 500, 3), dtype=np.uint8))
+
+    pending = RecognitionPipeline._build_pending_question(
+        ocr,
+        "稻香村的村长是谁？",
+        1,
+        1.0,
+        1.0,
+        500,
+        300,
+    )
+
+    assert pending is not None
+    assert pending.question == "稻香村的村长是谁？"
+    assert tuple(option.text for option in pending.options) == ("刘洋", "王遗风")
+    assert pending.options[0].display_text == "A. 刘洋"
+    assert pending.options[0].box.top < pending.options[1].box.top

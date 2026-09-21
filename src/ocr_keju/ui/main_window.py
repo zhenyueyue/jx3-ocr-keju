@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from ocr_keju.capture import CaptureRegion
-from ocr_keju.pipeline import RecognitionOutcome
+from ocr_keju.pipeline import PendingQuestion, RecognitionOutcome
 
 
 class MainWindow(QMainWindow):
@@ -22,6 +22,7 @@ class MainWindow(QMainWindow):
     recognize_requested = Signal()
     monitor_toggle_requested = Signal()
     sync_requested = Signal()
+    pending_answer_selected = Signal(int)
     closing = Signal()
 
     def __init__(self) -> None:
@@ -96,6 +97,23 @@ class MainWindow(QMainWindow):
         answer_layout.addWidget(self.meta_label)
         layout.addWidget(answer_card)
 
+        self.pending_card = QFrame()
+        self.pending_card.setObjectName("pendingCard")
+        pending_layout = QVBoxLayout(self.pending_card)
+        pending_layout.setContentsMargins(18, 14, 18, 14)
+        pending_layout.setSpacing(8)
+        pending_title = QLabel("题库未收录 · 点一下正确答案即可补录")
+        pending_title.setObjectName("pendingTitle")
+        self.pending_question_label = QLabel("")
+        self.pending_question_label.setWordWrap(True)
+        self.pending_options_layout = QVBoxLayout()
+        self.pending_options_layout.setSpacing(6)
+        pending_layout.addWidget(pending_title)
+        pending_layout.addWidget(self.pending_question_label)
+        pending_layout.addLayout(self.pending_options_layout)
+        self.pending_card.hide()
+        layout.addWidget(self.pending_card)
+
         ocr_caption = QLabel("OCR 原文")
         ocr_caption.setObjectName("muted")
         self.ocr_text = QTextEdit()
@@ -127,6 +145,18 @@ class MainWindow(QMainWindow):
                 border: 1px solid #252d3a;
                 border-radius: 12px;
             }
+            QFrame#pendingCard {
+                background: #211d13;
+                border: 1px solid #6b5727;
+                border-radius: 12px;
+            }
+            QLabel#pendingTitle { color: #ffd166; font-weight: 700; }
+            QPushButton#pendingOption {
+                text-align: left;
+                background: #2a2519;
+                border-color: #5c4d27;
+            }
+            QPushButton#pendingOption:hover { background: #39301d; }
             QPushButton {
                 background: #202735;
                 border: 1px solid #313b4d;
@@ -185,10 +215,36 @@ class MainWindow(QMainWindow):
     def show_status(self, message: str) -> None:
         self.status_label.setText(message)
 
+    def show_pending_question(self, pending: PendingQuestion) -> None:
+        self.clear_pending_question()
+        self.pending_question_label.setText(pending.question)
+        for index, option in enumerate(pending.options):
+            button = QPushButton(option.display_text)
+            button.setObjectName("pendingOption")
+            button.clicked.connect(
+                lambda _checked=False, answer_index=index: self.pending_answer_selected.emit(answer_index)
+            )
+            self.pending_options_layout.addWidget(button)
+        self.pending_card.show()
+
+    def clear_pending_question(self) -> None:
+        while self.pending_options_layout.count():
+            item = self.pending_options_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.pending_question_label.clear()
+        self.pending_card.hide()
+
+    def show_user_answer_saved(self, question: str, answer: str) -> None:
+        self.answer_label.setText(answer)
+        self.match_label.setText(question)
+        self.meta_label.setText("来源 用户补录 · 已写入本地题库")
+
     def show_outcome(self, outcome: RecognitionOutcome) -> None:
         self.ocr_text.setPlainText(outcome.ocr.text)
         if outcome.match is None:
-            self.answer_label.setText("未找到答案")
+            self.answer_label.setText("题库未收录" if outcome.pending_question is not None else "未找到答案")
             self.match_label.setText(outcome.warning)
             self.meta_label.setText(
                 f"OCR 置信度 {outcome.ocr.mean_score:.0%} · {outcome.ocr.elapsed_seconds * 1000:.0f} ms"
