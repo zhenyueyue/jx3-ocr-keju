@@ -62,6 +62,32 @@ def test_service_uses_fuzzy_local_match_for_small_ocr_error(tmp_path) -> None:
     assert api.calls == []
 
 
+def test_service_extracts_question_from_ocr_lines_with_options(tmp_path) -> None:
+    repository = QuestionRepository(tmp_path / "questions.db")
+    repository.upsert_many(
+        [
+            ExamQuestion(
+                remote_id=9,
+                title="单选题：稻香村的村长是谁？",
+                normalized_title="稻香村的村长是谁",
+                options=("刘洋", "王遗风", "李复"),
+                answer_indices=(0,),
+                answer_text=("刘洋",),
+                is_right=True,
+            )
+        ]
+    )
+    api = FakeApiClient([])
+    service = QuestionService(repository, api)  # type: ignore[arg-type]
+
+    resolution = service.resolve_ocr_lines(("稻香衬的村长是谁?", "A. 刘洋", "B. 王遗风", "C. 李复"))
+
+    assert resolution.result is not None
+    assert resolution.result.question.remote_id == 9
+    assert resolution.question_line_count == 1
+    assert api.calls == []
+
+
 def test_remote_queries_include_long_ocr_line() -> None:
     queries = QuestionService._remote_queries(
         "以下哪个江湖势力曾派人到稻香村\n《空冥诀》的消息？",

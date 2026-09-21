@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 
 from ocr_keju.api.client import JX3BoxExamClient
@@ -7,6 +8,13 @@ from ocr_keju.database.repository import QuestionRepository
 from ocr_keju.matching import LocalQuestionMatcher
 from ocr_keju.models import ExamQuestion, SearchResult
 from ocr_keju.question import normalize_question
+
+
+@dataclass(frozen=True, slots=True)
+class OcrQuestionResolution:
+    result: SearchResult | None
+    question_line_count: int
+    raw_question: str
 
 
 class QuestionService:
@@ -19,6 +27,51 @@ class QuestionService:
         self.repository = repository
         self.api_client = api_client
         self.local_match_threshold = local_match_threshold
+
+    def resolve_ocr_lines(self, lines: list[str] | tuple[str, ...]) -> OcrQuestionResolution:
+        cleaned = [line.strip() for line in lines if line and line.strip()]
+        if not cleaned:
+            return OcrQuestionResolution(None, 0, "")
+
+        # 科举界面通常是题干在上、选项在下。尝试不同长度的顶部连续文本，
+        # 用本地题库选出最像题干的那一段，避免把答案选项拼进题目。
+        max_end = len(cleaned) if len(cleaned) <= 2 else len(cleaned) - 1
+        matcher = LocalQuestionMatcher(self.repository.list_all())
+        best_raw = cleaned[0]
+        best_end = 1
+        best_score = -1.0
+        best_question: ExamQuestion | None = None
+
+        for end in range(1, max_end + 1):
+            raw = "\n".join(cleaned[:end])
+            normalized = normalize_question(raw)
+            if not normalized:
+                continue
+
+            exact = self.repository.find_exact(normalized)
+            if exact is not None:
+                return OcrQuestionResolution(
+                    SearchResult(question=exact, source="local", confidence=1.0),
+                    end,
+                    raw,
+                )
+
+            candidate = matcher.best(normalized)
+            if candidate is not None and candidate.confidence > best_score:
+                best_score = candidate.confidence
+                best_question = candidate.question
+                best_raw = raw
+                best_end = end
+
+        if best_question is not None and best_score >= self.local_match_threshold:
+            self.repository.increment_hit(best_question.remote_id)
+            return OcrQuestionResolution(
+                SearchResult(question=best_question, source="local", confidence=best_score),
+                best_end,
+                best_raw,
+            )
+
+        return OcrQuestionResolution(self.resolve(best_raw), best_end, best_raw)
 
     def resolve(self, raw_question: str) -> SearchResult | None:
         normalized = normalize_question(raw_question)

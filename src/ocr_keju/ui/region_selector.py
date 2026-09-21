@@ -57,7 +57,7 @@ class RegionSelector(QWidget):
         painter.drawText(
             24,
             36,
-            "拖动框选科举题目文字区域 · Esc 取消",
+            "拖动框选科举题目 + 全部选项区域 · Esc 取消",
         )
 
         selection = self._selection_rect()

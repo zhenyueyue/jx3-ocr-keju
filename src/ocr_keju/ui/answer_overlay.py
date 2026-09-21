@@ -1,69 +1,64 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtWidgets import QWidget
 
+from ocr_keju.capture import CaptureRegion
 from ocr_keju.pipeline import RecognitionOutcome
 
 
-class AnswerOverlay(QFrame):
+class AnswerOverlay(QWidget):
+    """Transparent click-through overlay that outlines the correct option in-place."""
+
     def __init__(self) -> None:
         super().__init__(None)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
+            | Qt.WindowType.WindowTransparentForInput
         )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setObjectName("answerOverlay")
-        self.setStyleSheet(
-            """
-            QFrame#answerOverlay {
-                background: rgba(20, 23, 30, 235);
-                border: 1px solid rgba(255, 255, 255, 35);
-                border-radius: 12px;
-            }
-            QLabel { color: #f5f7fb; }
-            QLabel#overlayAnswer { font-size: 24px; font-weight: 700; }
-            QLabel#overlayMeta { color: #a9b0be; font-size: 12px; }
-            """
-        )
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 14, 18, 14)
-        layout.setSpacing(6)
-        self.answer_label = QLabel("-")
-        self.answer_label.setObjectName("overlayAnswer")
-        self.answer_label.setWordWrap(True)
-        self.meta_label = QLabel("")
-        self.meta_label.setObjectName("overlayMeta")
-        layout.addWidget(self.answer_label)
-        layout.addWidget(self.meta_label)
-        self.setMinimumWidth(320)
-        self.setMaximumWidth(560)
-        self._timer = QTimer(self)
-        self._timer.setSingleShot(True)
-        self._timer.timeout.connect(self.hide)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._rects: list[QRect] = []
 
-    def show_outcome(self, outcome: RecognitionOutcome, timeout_ms: int) -> None:
-        if outcome.match is None:
+    def show_outcome(self, outcome: RecognitionOutcome, region: CaptureRegion) -> None:
+        if outcome.match is None or not outcome.answer_boxes:
+            self.hide()
             return
-        result = outcome.match
-        answer = " / ".join(result.question.answer_text) or "未解析到答案"
-        self.answer_label.setText(answer)
-        self.meta_label.setText(
-            f"{result.source} · 匹配 {result.confidence:.0%} · OCR {outcome.ocr.mean_score:.0%}"
-        )
-        self.adjustSize()
-        screen = QGuiApplication.screenAt(QGuiApplication.primaryScreen().geometry().center())
-        if screen is None:
-            screen = QGuiApplication.primaryScreen()
-        if screen is not None:
-            area = screen.availableGeometry()
-            self.move(
-                area.right() - self.width() - 24,
-                area.top() + 24,
+
+        global_rects = [
+            QRect(
+                region.left + box.left,
+                region.top + box.top,
+                box.width,
+                box.height,
             )
+            for box in outcome.answer_boxes
+        ]
+        bounds = global_rects[0]
+        for rect in global_rects[1:]:
+            bounds = bounds.united(rect)
+        bounds = bounds.adjusted(-8, -8, 8, 8)
+
+        self._rects = [rect.translated(-bounds.left(), -bounds.top()) for rect in global_rects]
+        self.setGeometry(bounds)
         self.show()
         self.raise_()
-        self._timer.start(max(1000, timeout_ms))
+        self.update()
+
+    def clear(self) -> None:
+        self._rects.clear()
+        self.hide()
+
+    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if not self._rects:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(55, 230, 125, 245), 4))
+        for rect in self._rects:
+            painter.drawRoundedRect(rect, 7, 7)

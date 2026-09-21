@@ -20,6 +20,7 @@ from ocr_keju.pipeline import RecognitionOutcome
 class MainWindow(QMainWindow):
     select_region_requested = Signal()
     recognize_requested = Signal()
+    monitor_toggle_requested = Signal()
     sync_requested = Signal()
     closing = Signal()
 
@@ -40,7 +41,7 @@ class MainWindow(QMainWindow):
 
         title = QLabel("OCR 科举助手")
         title.setObjectName("title")
-        subtitle = QLabel("本地 OCR · 本地题库优先 · JX3BOX 远端兜底")
+        subtitle = QLabel("实时 OCR · 自动检测新题目 · 正确选项原位描边")
         subtitle.setObjectName("muted")
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -50,21 +51,23 @@ class MainWindow(QMainWindow):
         status_layout = QHBoxLayout(status_card)
         status_layout.setContentsMargins(16, 12, 16, 12)
         self.bank_label = QLabel("本地题库：-")
-        self.region_label = QLabel("截图区域：未设置")
-        self.hotkey_label = QLabel("快捷键：Alt + Q")
+        self.region_label = QLabel("检测区域：未设置")
+        self.monitor_label = QLabel("实时检测：等待框选")
         status_layout.addWidget(self.bank_label)
         status_layout.addStretch(1)
         status_layout.addWidget(self.region_label)
         status_layout.addStretch(1)
-        status_layout.addWidget(self.hotkey_label)
+        status_layout.addWidget(self.monitor_label)
         layout.addWidget(status_card)
 
         buttons = QHBoxLayout()
-        self.select_button = QPushButton("框选题目区域")
-        self.recognize_button = QPushButton("立即识别")
-        self.recognize_button.setObjectName("primaryButton")
+        self.select_button = QPushButton("框选题目 + 选项区域")
+        self.monitor_button = QPushButton("暂停实时检测")
+        self.monitor_button.setObjectName("primaryButton")
+        self.recognize_button = QPushButton("立即检测")
         self.sync_button = QPushButton("同步题库")
         buttons.addWidget(self.select_button)
+        buttons.addWidget(self.monitor_button)
         buttons.addWidget(self.recognize_button)
         buttons.addWidget(self.sync_button)
         buttons.addStretch(1)
@@ -103,6 +106,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.ocr_text, 1)
 
         self.select_button.clicked.connect(self.select_region_requested.emit)
+        self.monitor_button.clicked.connect(self.monitor_toggle_requested.emit)
         self.recognize_button.clicked.connect(self.recognize_requested.emit)
         self.sync_button.clicked.connect(self.sync_requested.emit)
 
@@ -150,18 +154,29 @@ class MainWindow(QMainWindow):
     def set_bank_count(self, count: int) -> None:
         self.bank_label.setText(f"本地题库：{count}")
 
-    def set_hotkey(self, hotkey: str) -> None:
-        readable = hotkey.replace("<", "").replace(">", "").replace("+", " + ").title()
-        self.hotkey_label.setText(f"快捷键：{readable}")
+    def set_monitoring(self, enabled: bool, configured: bool) -> None:
+        if not configured:
+            self.monitor_label.setText("实时检测：等待框选")
+            self.monitor_button.setText("开启实时检测")
+            self.monitor_button.setDisabled(True)
+            return
+        self.monitor_button.setDisabled(False)
+        if enabled:
+            self.monitor_label.setText("实时检测：已开启")
+            self.monitor_button.setText("暂停实时检测")
+        else:
+            self.monitor_label.setText("实时检测：已暂停")
+            self.monitor_button.setText("开启实时检测")
 
     def set_region(self, region: CaptureRegion | None) -> None:
         if region is None:
-            self.region_label.setText("截图区域：未设置")
+            self.region_label.setText("检测区域：未设置")
             return
-        self.region_label.setText(f"截图区域：{region.width}×{region.height}")
+        self.region_label.setText(f"检测区域：{region.width}×{region.height}")
 
     def set_busy(self, busy: bool, message: str = "") -> None:
         self.recognize_button.setDisabled(busy)
+        self.monitor_button.setDisabled(busy)
         self.sync_button.setDisabled(busy)
         self.select_button.setDisabled(busy)
         if message:

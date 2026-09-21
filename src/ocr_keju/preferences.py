@@ -10,7 +10,6 @@ from ocr_keju.capture import CaptureRegion
 @dataclass(frozen=True, slots=True)
 class UserPreferences:
     capture_region: CaptureRegion | None = None
-    hotkey: str = "<alt>+q"
     local_match_threshold: float = 0.78
     overlay_timeout_ms: int = 6000
 
@@ -40,7 +39,6 @@ class PreferencesStore:
             timeout_value = 6000
         return UserPreferences(
             capture_region=CaptureRegion.from_dict(payload.get("capture_region")),
-            hotkey=str(payload.get("hotkey") or "<alt>+q"),
             local_match_threshold=threshold_value,
             overlay_timeout_ms=timeout_value,
         )
@@ -53,7 +51,6 @@ class PreferencesStore:
                 if preferences.capture_region is not None
                 else None
             ),
-            "hotkey": preferences.hotkey,
             "local_match_threshold": preferences.local_match_threshold,
             "overlay_timeout_ms": preferences.overlay_timeout_ms,
         }
