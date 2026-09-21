@@ -22,7 +22,7 @@ from ocr_keju.ui.region_selector import RegionSelector
 from ocr_keju.ui.worker import Worker
 
 
-MONITOR_INTERVAL_MS = 450
+MONITOR_INTERVAL_MS = 120
 FRAME_CHANGE_THRESHOLD = 0.015
 
 
@@ -53,6 +53,7 @@ class DesktopController(QObject):
         self._monitor_enabled = True
         self._recapture_pending = False
         self._active_worker: Worker | None = None
+        self._warmup_worker: Worker | None = None
         self._last_signature: np.ndarray | None = None
         self._pending_signature: np.ndarray | None = None
 
@@ -62,7 +63,22 @@ class DesktopController(QObject):
 
         self._bind()
         self._refresh_status()
+        self._start_warmup()
         self._monitor_timer.start()
+
+    def _start_warmup(self) -> None:
+        worker = Worker(self.pipeline.warmup)
+        worker.signals.result.connect(self._warmup_finished)
+        worker.signals.error.connect(self._warmup_failed)
+        self._warmup_worker = worker
+        self.thread_pool.start(worker)
+
+    def _warmup_finished(self, _value: object) -> None:
+        self._warmup_worker = None
+
+    def _warmup_failed(self, message: str) -> None:
+        self._warmup_worker = None
+        self.window.show_status(f"OCR 预热失败，将在首次识别时重试：{message}")
 
     def _bind(self) -> None:
         self.window.select_region_requested.connect(self.select_region)
@@ -156,7 +172,7 @@ class DesktopController(QObject):
             # 先移除上一题的描边，再稍后重新截图，避免旧描边进入 OCR 图片。
             self.overlay.clear()
             self._recapture_pending = True
-            QTimer.singleShot(45, self._recognize_changed_frame)
+            QTimer.singleShot(20, self._recognize_changed_frame)
 
     def _recognize_changed_frame(self) -> None:
         self._recapture_pending = False
@@ -210,7 +226,7 @@ class DesktopController(QObject):
 
         self.window.set_bank_count(self.repository.count())
         # 描边出现后重新建立基线，避免程序自己的框触发下一次 OCR。
-        QTimer.singleShot(120, self._refresh_monitor_baseline)
+        QTimer.singleShot(50, self._refresh_monitor_baseline)
 
     def _recognition_error(self, message: str) -> None:
         self._finish_recognition()
@@ -247,7 +263,9 @@ class DesktopController(QObject):
                 base_url=self.settings.api_base_url,
                 timeout_seconds=max(20.0, self.settings.api_timeout_seconds),
             ) as client:
-                return QuestionBankSyncService(self.repository, client).sync()
+                report = QuestionBankSyncService(self.repository, client).sync()
+                self.pipeline.refresh_local_index()
+                return report
 
         worker = Worker(do_sync)
         worker.signals.result.connect(self._sync_done)

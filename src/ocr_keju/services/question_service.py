@@ -21,12 +21,14 @@ class QuestionService:
     def __init__(
         self,
         repository: QuestionRepository,
-        api_client: JX3BoxExamClient,
+        api_client: JX3BoxExamClient | None,
         local_match_threshold: float = 0.78,
+        local_matcher: LocalQuestionMatcher | None = None,
     ) -> None:
         self.repository = repository
         self.api_client = api_client
         self.local_match_threshold = local_match_threshold
+        self.local_matcher = local_matcher or LocalQuestionMatcher(repository.list_all())
 
     def resolve_ocr_lines(self, lines: list[str] | tuple[str, ...]) -> OcrQuestionResolution:
         cleaned = [line.strip() for line in lines if line and line.strip()]
@@ -36,7 +38,7 @@ class QuestionService:
         # 科举界面通常是题干在上、选项在下。尝试不同长度的顶部连续文本，
         # 用本地题库选出最像题干的那一段，避免把答案选项拼进题目。
         max_end = len(cleaned) if len(cleaned) <= 2 else len(cleaned) - 1
-        matcher = LocalQuestionMatcher(self.repository.list_all())
+        matcher = self.local_matcher
         best_raw = cleaned[0]
         best_end = 1
         best_score = -1.0
@@ -48,7 +50,7 @@ class QuestionService:
             if not normalized:
                 continue
 
-            exact = self.repository.find_exact(normalized)
+            exact = matcher.exact(normalized)
             if exact is not None:
                 return OcrQuestionResolution(
                     SearchResult(question=exact, source="local", confidence=1.0),
@@ -64,7 +66,6 @@ class QuestionService:
                 best_end = end
 
         if best_question is not None and best_score >= self.local_match_threshold:
-            self.repository.increment_hit(best_question.remote_id)
             return OcrQuestionResolution(
                 SearchResult(question=best_question, source="local", confidence=best_score),
                 best_end,
@@ -78,18 +79,20 @@ class QuestionService:
         if not normalized:
             return None
 
-        local = self.repository.find_exact(normalized)
+        local = self.local_matcher.exact(normalized)
         if local is not None:
             return SearchResult(question=local, source="local", confidence=1.0)
 
-        fuzzy = LocalQuestionMatcher(self.repository.list_all()).best(normalized)
+        fuzzy = self.local_matcher.best(normalized)
         if fuzzy is not None and fuzzy.confidence >= self.local_match_threshold:
-            self.repository.increment_hit(fuzzy.question.remote_id)
             return SearchResult(
                 question=fuzzy.question,
                 source="local",
                 confidence=fuzzy.confidence,
             )
+
+        if self.api_client is None:
+            return None
 
         remote_questions: list[ExamQuestion] = []
         for query in self._remote_queries(raw_question, normalized):
@@ -100,6 +103,7 @@ class QuestionService:
             return None
 
         self.repository.upsert_many(remote_questions)
+        self.local_matcher = LocalQuestionMatcher(self.repository.list_all())
         best, confidence = self._select_best(normalized, remote_questions)
         return SearchResult(question=best, source="jx3box", confidence=confidence)
 

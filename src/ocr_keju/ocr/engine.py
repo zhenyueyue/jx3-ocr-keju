@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import Lock
 from time import perf_counter
 from typing import Any
 
@@ -27,13 +28,29 @@ class RapidOcrEngine:
 
     def __init__(self) -> None:
         self._engine: Any | None = None
+        self._engine_lock = Lock()
 
     def _get_engine(self) -> Any:
-        if self._engine is None:
-            from rapidocr import RapidOCR
+        if self._engine is not None:
+            return self._engine
+        with self._engine_lock:
+            if self._engine is None:
+                from rapidocr import RapidOCR
 
-            self._engine = RapidOCR()
+                # RapidOCR 默认会把较小截图的短边强制放大到 736，
+                # 对清晰的游戏 UI 区域会制造大量无意义像素。这里只限制超大截图，
+                # 普通科举区域保持原尺寸，显著降低文字检测延迟。
+                self._engine = RapidOCR(
+                    params={
+                        "Det.limit_type": "max",
+                        "Det.limit_side_len": 960,
+                        "Global.log_level": "error",
+                    }
+                )
         return self._engine
+
+    def warmup(self) -> None:
+        self._get_engine()
 
     def recognize(self, image: np.ndarray) -> OcrResult:
         started = perf_counter()

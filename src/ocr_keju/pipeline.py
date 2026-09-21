@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import Lock
 
 import numpy as np
 from rapidfuzz import fuzz
@@ -9,6 +10,7 @@ from ocr_keju.api import JX3BoxApiError, JX3BoxExamClient
 from ocr_keju.config import Settings
 from ocr_keju.database import QuestionRepository
 from ocr_keju.image import preprocess_question_image
+from ocr_keju.matching import LocalQuestionMatcher
 from ocr_keju.models import SearchResult
 from ocr_keju.ocr import OcrResult, RapidOcrEngine
 from ocr_keju.question import normalize_question
@@ -44,6 +46,31 @@ class RecognitionPipeline:
         self.settings = settings
         self.repository = repository
         self.ocr_engine = ocr_engine or RapidOcrEngine()
+        self._local_matcher: LocalQuestionMatcher | None = None
+        self._matcher_lock = Lock()
+
+    def warmup(self) -> None:
+        self.ocr_engine.warmup()
+        self.refresh_local_index()
+
+    def invalidate_local_index(self) -> None:
+        with self._matcher_lock:
+            self._local_matcher = None
+
+    def refresh_local_index(self) -> None:
+        matcher = LocalQuestionMatcher(self.repository.list_all())
+        with self._matcher_lock:
+            self._local_matcher = matcher
+
+    def _get_local_matcher(self) -> LocalQuestionMatcher:
+        with self._matcher_lock:
+            matcher = self._local_matcher
+        if matcher is not None:
+            return matcher
+        self.refresh_local_index()
+        with self._matcher_lock:
+            assert self._local_matcher is not None
+            return self._local_matcher
 
     def recognize(
         self,
@@ -57,24 +84,39 @@ class RecognitionPipeline:
         if not ocr.text.strip():
             return RecognitionOutcome(ocr=ocr, match=None, warning="OCR 未识别到文字")
 
-        try:
-            with JX3BoxExamClient(
-                base_url=self.settings.api_base_url,
-                timeout_seconds=self.settings.api_timeout_seconds,
-            ) as client:
-                service = QuestionService(
-                    self.repository,
-                    client,
-                    local_match_threshold=local_match_threshold,
+        matcher = self._get_local_matcher()
+        local_service = QuestionService(
+            self.repository,
+            None,
+            local_match_threshold=local_match_threshold,
+            local_matcher=matcher,
+        )
+        resolution = local_service.resolve_ocr_lines(tuple(line.text for line in ocr.lines))
+        match = resolution.result
+
+        if match is None and resolution.raw_question:
+            try:
+                with JX3BoxExamClient(
+                    base_url=self.settings.api_base_url,
+                    timeout_seconds=self.settings.api_timeout_seconds,
+                ) as client:
+                    remote_service = QuestionService(
+                        self.repository,
+                        client,
+                        local_match_threshold=local_match_threshold,
+                        local_matcher=matcher,
+                    )
+                    match = remote_service.resolve(resolution.raw_question)
+                    if match is not None and match.source == "jx3box":
+                        with self._matcher_lock:
+                            self._local_matcher = remote_service.local_matcher
+            except JX3BoxApiError as exc:
+                return RecognitionOutcome(
+                    ocr=ocr,
+                    match=None,
+                    warning=f"本地未达到匹配阈值，远端查询失败：{exc}",
+                    detected_question=resolution.raw_question,
                 )
-                resolution = service.resolve_ocr_lines(tuple(line.text for line in ocr.lines))
-                match = resolution.result
-        except JX3BoxApiError as exc:
-            return RecognitionOutcome(
-                ocr=ocr,
-                match=None,
-                warning=f"本地未达到匹配阈值，远端查询失败：{exc}",
-            )
 
         if match is None:
             return RecognitionOutcome(
