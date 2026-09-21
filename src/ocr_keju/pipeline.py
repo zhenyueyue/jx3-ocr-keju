@@ -34,6 +34,7 @@ class RecognitionOutcome:
     warning: str = ""
     answer_boxes: tuple[AnswerBox, ...] = ()
     detected_question: str = ""
+    question_watch_height: int = 0
 
 
 class RecognitionPipeline:
@@ -84,6 +85,9 @@ class RecognitionPipeline:
         if not ocr.text.strip():
             return RecognitionOutcome(ocr=ocr, match=None, warning="OCR 未识别到文字")
 
+        scale_x = prepared_width / max(original_width, 1)
+        scale_y = prepared_height / max(original_height, 1)
+
         matcher = self._get_local_matcher()
         local_service = QuestionService(
             self.repository,
@@ -93,6 +97,12 @@ class RecognitionPipeline:
         )
         resolution = local_service.resolve_ocr_lines(tuple(line.text for line in ocr.lines))
         match = resolution.result
+        question_watch_height = self._question_watch_height(
+            ocr,
+            resolution.question_line_count,
+            scale_y,
+            original_height,
+        )
 
         if match is None and resolution.raw_question:
             try:
@@ -116,6 +126,7 @@ class RecognitionPipeline:
                     match=None,
                     warning=f"本地未达到匹配阈值，远端查询失败：{exc}",
                     detected_question=resolution.raw_question,
+                    question_watch_height=question_watch_height,
                 )
 
         if match is None:
@@ -124,10 +135,9 @@ class RecognitionPipeline:
                 match=None,
                 warning="未找到匹配题目",
                 detected_question=resolution.raw_question,
+                question_watch_height=question_watch_height,
             )
 
-        scale_x = prepared_width / max(original_width, 1)
-        scale_y = prepared_height / max(original_height, 1)
         answer_boxes = self._find_answer_boxes(
             ocr,
             match,
@@ -144,7 +154,27 @@ class RecognitionPipeline:
             warning=warning,
             answer_boxes=answer_boxes,
             detected_question=resolution.raw_question,
+            question_watch_height=question_watch_height,
         )
+
+    @staticmethod
+    def _question_watch_height(
+        ocr: OcrResult,
+        question_line_count: int,
+        scale_y: float,
+        original_height: int,
+    ) -> int:
+        question_lines = [
+            line
+            for line in ocr.lines[: max(0, question_line_count)]
+            if line.box
+        ]
+        if not question_lines:
+            return max(40, min(original_height, int(original_height * 0.35)))
+
+        bottom = max(max(point[1] for point in line.box) for line in question_lines)
+        mapped_bottom = int(bottom / max(scale_y, 1e-6))
+        return max(40, min(original_height, mapped_bottom + 24))
 
     @staticmethod
     def _find_answer_boxes(

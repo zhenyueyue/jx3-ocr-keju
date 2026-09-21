@@ -50,3 +50,4 @@ def test_pipeline_locates_correct_answer_box_from_full_region(tmp_path, monkeypa
     assert box.text == "A. 刘洋"
     assert box.top < 100
     assert box.confidence >= 0.9
+    assert 50 < outcome.question_watch_height < 90

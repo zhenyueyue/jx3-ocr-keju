@@ -23,7 +23,7 @@ from ocr_keju.ui.worker import Worker
 
 
 MONITOR_INTERVAL_MS = 120
-FRAME_CHANGE_THRESHOLD = 0.015
+FRAME_CHANGE_THRESHOLD = 0.012
 
 
 class DesktopController(QObject):
@@ -55,7 +55,8 @@ class DesktopController(QObject):
         self._active_worker: Worker | None = None
         self._warmup_worker: Worker | None = None
         self._last_signature: np.ndarray | None = None
-        self._pending_signature: np.ndarray | None = None
+        self._pending_frame: np.ndarray | None = None
+        self._question_watch_height: int | None = None
 
         self._monitor_timer = QTimer(self)
         self._monitor_timer.setInterval(MONITOR_INTERVAL_MS)
@@ -110,7 +111,8 @@ class DesktopController(QObject):
         self.preferences = self.preferences_store.update_region(self.preferences, region)
         self._monitor_enabled = True
         self._last_signature = None
-        self._pending_signature = None
+        self._pending_frame = None
+        self._question_watch_height = None
         self.overlay.clear()
         self.window.set_region(region)
         self.window.set_monitoring(True, True)
@@ -141,8 +143,8 @@ class DesktopController(QObject):
         except ScreenCaptureError as exc:
             self.window.show_status(str(exc))
             return
-        self.overlay.clear()
-        self._start_recognition(image, frame_signature(image), manual=True)
+        self.overlay.show_detecting(region)
+        self._start_recognition(image, manual=True)
 
     def _monitor_tick(self) -> None:
         if (
@@ -162,15 +164,16 @@ class DesktopController(QObject):
             self.window.show_status(str(exc))
             return
 
-        signature = frame_signature(image)
+        signature = self._monitor_signature(image)
         if self._last_signature is None:
-            self.overlay.clear()
-            self._start_recognition(image, signature)
+            self.overlay.show_detecting(region)
+            self._start_recognition(image)
             return
 
         if frame_difference(self._last_signature, signature) >= FRAME_CHANGE_THRESHOLD:
             # 先移除上一题的描边，再稍后重新截图，避免旧描边进入 OCR 图片。
             self.overlay.clear()
+            self.window.show_status("检测到题目变化，正在读取新题…")
             self._recapture_pending = True
             QTimer.singleShot(20, self._recognize_changed_frame)
 
@@ -186,18 +189,26 @@ class DesktopController(QObject):
         except ScreenCaptureError as exc:
             self.window.show_status(str(exc))
             return
-        self._start_recognition(image, frame_signature(image))
+        self.overlay.show_detecting(region)
+        self._start_recognition(image)
+
+    def _monitor_signature(self, image: np.ndarray) -> np.ndarray:
+        height = image.shape[0]
+        watch_height = self._question_watch_height
+        if watch_height is None or watch_height <= 0:
+            watch_height = max(40, int(height * 0.4))
+        watch_height = min(height, max(40, watch_height))
+        return frame_signature(image[:watch_height, :])
 
     def _start_recognition(
         self,
         image: np.ndarray,
-        signature: np.ndarray,
         manual: bool = False,
     ) -> None:
         if self._recognition_running or self._busy:
             return
         self._recognition_running = True
-        self._pending_signature = signature
+        self._pending_frame = image
         self.window.show_status("正在识别题目并定位正确选项…" if manual else "检测到新题目，正在识别…")
         threshold = self.preferences.local_match_threshold
         worker = Worker(lambda: self.pipeline.recognize(image, threshold))
@@ -207,51 +218,49 @@ class DesktopController(QObject):
         self.thread_pool.start(worker)
 
     def _recognition_done(self, value: object) -> None:
-        self._finish_recognition()
         if not isinstance(value, RecognitionOutcome):
+            self._finish_recognition()
             self.window.show_status("识别任务返回了未知结果")
             return
 
+        if value.question_watch_height > 0:
+            self._question_watch_height = value.question_watch_height
+        self._finish_recognition()
         self.window.show_outcome(value)
         region = self.preferences.capture_region
         if region is not None and value.answer_boxes:
             self.overlay.show_outcome(value, region)
             self.window.show_status("已识别并框出正确答案 · 实时检测继续运行")
         elif value.warning:
-            self.overlay.clear()
+            if region is not None:
+                self.overlay.show_message(region, "已检测新题 · 未定位答案")
+            else:
+                self.overlay.clear()
             self.window.show_status(value.warning)
         else:
-            self.overlay.clear()
+            if region is not None:
+                self.overlay.show_message(region, "已检测新题 · 未定位答案")
+            else:
+                self.overlay.clear()
             self.window.show_status("识别完成，但没有定位到屏幕选项")
 
         self.window.set_bank_count(self.repository.count())
-        # 描边出现后重新建立基线，避免程序自己的框触发下一次 OCR。
-        QTimer.singleShot(50, self._refresh_monitor_baseline)
 
     def _recognition_error(self, message: str) -> None:
         self._finish_recognition()
-        self.overlay.clear()
+        region = self.preferences.capture_region
+        if region is not None:
+            self.overlay.show_message(region, "新题识别失败 · 可立即检测")
+        else:
+            self.overlay.clear()
         self.window.show_status(f"实时识别失败：{message}")
-        QTimer.singleShot(500, self._refresh_monitor_baseline)
 
     def _finish_recognition(self) -> None:
-        if self._pending_signature is not None:
-            self._last_signature = self._pending_signature
-        self._pending_signature = None
+        if self._pending_frame is not None:
+            self._last_signature = self._monitor_signature(self._pending_frame)
+        self._pending_frame = None
         self._active_worker = None
         self._recognition_running = False
-
-    def _refresh_monitor_baseline(self) -> None:
-        if self._busy or self._recognition_running:
-            return
-        region = self.preferences.capture_region
-        if region is None:
-            return
-        try:
-            image = self.capture.capture(region)
-        except ScreenCaptureError:
-            return
-        self._last_signature = frame_signature(image)
 
     def sync_bank(self) -> None:
         if self._busy or self._recognition_running:
