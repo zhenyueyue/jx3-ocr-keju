@@ -52,7 +52,7 @@ uv run ocr-keju-gui
 9. 补录成功后当前题会立即画出绿色答案框，下一次再遇到这道题会直接自动命中；用户补录答案优先级高于远端题库。
 10. 如需临时停止，可点击 **暂停实时检测**；**立即检测** 可用于手动强制识别当前画面。
 
-配置保存在 `data/settings.json`，题库保存在 `data/questions.db`。
+源码开发模式下，配置保存在 `data/settings.json`，题库保存在 `data/questions.db`。Windows 打包版则使用 `%LOCALAPPDATA%\jx3-ocr-keju\` 作为持久数据目录，因此重新打包、删除或覆盖 `dist` 不会再删除题库和用户补录题。
 
 ## CLI
 
@@ -119,6 +119,16 @@ uv run ocr-keju stats
 JX3BOX 当前 PVX 前端源码还公开使用 `next2.jx3box.com/api/game/exam/search` 与 `.../random` 接口；本项目没有把随机接口当成“完整题库”依据，而是继续使用你指定的 `pull-gplugin` 接口作为题库答案来源。
 
 ## 数据目录
+
+Windows 打包版默认使用：
+
+```text
+%LOCALAPPDATA%\jx3-ocr-keju\
+├─ questions.db
+└─ settings.json
+```
+
+源码开发模式仍使用项目根目录的 `data/`。本地 `scripts/build_windows.ps1` 在 PyInstaller 清理 `dist` 之前，会把旧的项目 `data/` 和旧版 `dist/ocr-keju/data/` 中尚未迁移的运行数据复制到持久目录；打包程序自身启动时也会尝试迁移旧版程序目录中的数据。迁移只补缺失文件，绝不会覆盖已经存在的持久数据库。
 
 可通过环境变量修改：
 
