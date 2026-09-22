@@ -4,6 +4,7 @@ from PySide6.QtCore import QEasingCurve, QEvent, Property, QPropertyAnimation, Q
 from PySide6.QtGui import QColor, QCloseEvent, QFont, QMouseEvent, QPainter
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -204,6 +205,7 @@ class MainWindow(QMainWindow):
         self._monitor_configured = False
         self._build_ui()
         self._apply_style()
+        self._setup_micro_interactions()
         self._sync_window_state()
 
     def _build_ui(self) -> None:
@@ -298,7 +300,7 @@ class MainWindow(QMainWindow):
 
         left.addStretch(1)
 
-        side_note = QLabel("提示：框选范围越紧凑，OCR 越快。")
+        side_note = QLabel("本地 OCR · 截图不上传\n框选越紧凑，识别越快。")
         side_note.setObjectName("footnote")
         side_note.setWordWrap(True)
         left.addWidget(side_note)
@@ -311,6 +313,7 @@ class MainWindow(QMainWindow):
 
         answer_card = QFrame()
         answer_card.setObjectName("answerCard")
+        self.answer_card = answer_card
         answer_layout = QVBoxLayout(answer_card)
         answer_layout.setContentsMargins(20, 18, 20, 18)
         answer_layout.setSpacing(8)
@@ -425,6 +428,20 @@ class MainWindow(QMainWindow):
         self.sync_button.clicked.connect(self.sync_requested.emit)
         self.ocr_toggle_button.clicked.connect(self._toggle_ocr_details)
 
+        self.monitor_button.setToolTip("暂停或恢复自动换题检测")
+        self.select_button.setToolTip("重新选择题目和全部答案选项所在区域")
+        self.recognize_button.setToolTip("立即识别当前画面，不等待自动换题检测")
+        self.sync_button.setToolTip("从 JX3BOX 更新远端科举题库")
+        self.ocr_toggle_button.setToolTip("查看本次 OCR 识别到的原始文字")
+        for button in (
+            self.monitor_button,
+            self.select_button,
+            self.recognize_button,
+            self.sync_button,
+            self.ocr_toggle_button,
+        ):
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+
     def _make_status_row(
         self,
         parent_layout: QVBoxLayout,
@@ -451,6 +468,52 @@ class MainWindow(QMainWindow):
         row_layout.addWidget(value_label)
         parent_layout.addWidget(row)
         return value_label
+
+    def _setup_micro_interactions(self) -> None:
+        self._answer_opacity = QGraphicsOpacityEffect(self.answer_card)
+        self.answer_card.setGraphicsEffect(self._answer_opacity)
+        self._answer_opacity.setOpacity(1.0)
+        self._answer_reveal = QPropertyAnimation(self._answer_opacity, b"opacity", self)
+        self._answer_reveal.setDuration(180)
+        self._answer_reveal.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        self._pending_opacity = QGraphicsOpacityEffect(self.pending_card)
+        self.pending_card.setGraphicsEffect(self._pending_opacity)
+        self._pending_opacity.setOpacity(1.0)
+        self._pending_reveal = QPropertyAnimation(self._pending_opacity, b"opacity", self)
+        self._pending_reveal.setDuration(160)
+        self._pending_reveal.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        self._status_opacity = QGraphicsOpacityEffect(self.status_dot)
+        self.status_dot.setGraphicsEffect(self._status_opacity)
+        self._status_opacity.setOpacity(1.0)
+        self._status_pulse = QPropertyAnimation(self._status_opacity, b"opacity", self)
+        self._status_pulse.setDuration(1050)
+        self._status_pulse.setStartValue(0.38)
+        self._status_pulse.setKeyValueAt(0.5, 1.0)
+        self._status_pulse.setEndValue(0.38)
+        self._status_pulse.setLoopCount(-1)
+        self._status_pulse.setEasingCurve(QEasingCurve.Type.InOutSine)
+
+    def _reveal_answer(self) -> None:
+        self._answer_reveal.stop()
+        self._answer_reveal.setStartValue(0.68)
+        self._answer_reveal.setEndValue(1.0)
+        self._answer_reveal.start()
+
+    def _reveal_pending(self) -> None:
+        self._pending_reveal.stop()
+        self._pending_reveal.setStartValue(0.58)
+        self._pending_reveal.setEndValue(1.0)
+        self._pending_reveal.start()
+
+    def _set_status_activity(self, busy: bool) -> None:
+        if busy:
+            self._status_pulse.stop()
+            self._status_pulse.start()
+        else:
+            self._status_pulse.stop()
+            self._status_opacity.setOpacity(1.0)
 
     def _toggle_ocr_details(self) -> None:
         self._ocr_expanded = not self._ocr_expanded
@@ -541,6 +604,7 @@ class MainWindow(QMainWindow):
             QFrame#answerCard {
                 background: #121821;
                 border: 1px solid #253246;
+                border-left: 3px solid #315fbd;
                 border-radius: 8px;
             }
 
@@ -667,6 +731,10 @@ class MainWindow(QMainWindow):
                 background: #1d2530;
                 border-color: #394658;
             }
+            QPushButton#secondaryButton:pressed {
+                background: #141a22;
+                border-color: #303b4b;
+            }
 
             QPushButton#quietButton {
                 background: #10151c;
@@ -677,6 +745,11 @@ class MainWindow(QMainWindow):
                 color: #e0e5ec;
                 background: #171d26;
                 border-color: #344052;
+            }
+            QPushButton#quietButton:pressed {
+                color: #cdd5df;
+                background: #0d1218;
+                border-color: #293341;
             }
 
             QPushButton#linkButton {
@@ -728,6 +801,10 @@ class MainWindow(QMainWindow):
                 background: #2b2417;
                 border-color: #755d2c;
             }
+            QPushButton#pendingOption:pressed {
+                background: #19150f;
+                border-color: #5f4c27;
+            }
 
             QTextEdit#ocrText {
                 background: #0b0f14;
@@ -759,6 +836,14 @@ class MainWindow(QMainWindow):
             }
             QSizeGrip#sizeGrip {
                 background: transparent;
+            }
+            QToolTip {
+                color: #dfe5ed;
+                background: #171d26;
+                border: 1px solid #303a49;
+                padding: 5px 8px;
+                border-radius: 4px;
+                font-size: 11px;
             }
             """
         )
@@ -840,6 +925,7 @@ class MainWindow(QMainWindow):
             state = "ok"
         self.status_dot.setProperty("state", state)
         self._refresh_dynamic_style(self.status_dot)
+        self._set_status_activity(state == "busy")
 
     def show_pending_question(self, pending: PendingQuestion) -> None:
         self.clear_pending_question()
@@ -847,6 +933,8 @@ class MainWindow(QMainWindow):
         for index, option in enumerate(pending.options):
             button = QPushButton(option.display_text)
             button.setObjectName("pendingOption")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setToolTip("将这个选项保存为本题正确答案")
             button.clicked.connect(
                 lambda _checked=False, answer_index=index: self.pending_answer_selected.emit(
                     answer_index
@@ -854,6 +942,7 @@ class MainWindow(QMainWindow):
             )
             self.pending_options_layout.addWidget(button)
         self.pending_card.show()
+        self._reveal_pending()
         self.answer_status.setText("待补录")
         self.answer_status.setProperty("state", "warn")
         self._refresh_dynamic_style(self.answer_status)
@@ -874,6 +963,7 @@ class MainWindow(QMainWindow):
         self.answer_status.setText("已补录")
         self.answer_status.setProperty("state", "ok")
         self._refresh_dynamic_style(self.answer_status)
+        self._reveal_answer()
 
     def show_outcome(self, outcome: RecognitionOutcome) -> None:
         self.ocr_text.setPlainText(outcome.ocr.text)
@@ -894,6 +984,7 @@ class MainWindow(QMainWindow):
                 f"OCR {outcome.ocr.mean_score:.0%} · "
                 f"{outcome.ocr.elapsed_seconds * 1000:.0f} ms"
             )
+            self._reveal_answer()
             return
 
         result = outcome.match
@@ -910,6 +1001,7 @@ class MainWindow(QMainWindow):
         self.answer_status.setText("已命中")
         self.answer_status.setProperty("state", "ok")
         self._refresh_dynamic_style(self.answer_status)
+        self._reveal_answer()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.closing.emit()
