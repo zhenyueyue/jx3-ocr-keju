@@ -41,7 +41,7 @@ jobs:
         shell: pwsh
         run: uv run pyinstaller --noconfirm --clean ocr-keju.spec
 
-      - name: Package ZIP
+      - name: Prepare single-file executable
         id: package
         shell: pwsh
         run: |
@@ -49,15 +49,15 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($tag) -or $tag -eq "main") {
             $tag = "manual-${{ github.run_number }}"
           }
-          $archive = "jx3-ocr-keju-$tag-windows-x64.zip"
-          Compress-Archive -Path ".\dist\ocr-keju\*" -DestinationPath ".\dist\$archive" -Force
-          "archive=$archive" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "path=dist/$archive" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $file = "jx3-ocr-keju-$tag-windows-x64.exe"
+          Copy-Item ".\dist\ocr-keju.exe" ".\dist\$file" -Force
+          "file=$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "path=dist/$file" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.package.outputs.archive }}
+          name: ${{ steps.package.outputs.file }}
           path: ${{ steps.package.outputs.path }}
           if-no-files-found: error
 

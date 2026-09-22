@@ -25,21 +25,15 @@
 
 ## 下载与运行
 
-前往 [GitHub Releases](https://github.com/zhenyueyue/jx3-ocr-keju/releases) 下载 Windows x64 压缩包。
-
-下载后请 **完整解压整个压缩包**，不要只单独复制其中的 `ocr-keju.exe`。
-
-正常目录类似：
+前往 [GitHub Releases](https://github.com/zhenyueyue/jx3-ocr-keju/releases) 下载 Windows x64 单文件版本：
 
 ```text
-ocr-keju/
-├─ ocr-keju.exe
-└─ _internal/
+jx3-ocr-keju-<版本>-windows-x64.exe
 ```
 
-运行 `ocr-keju.exe` 即可。
+下载完成后直接双击 EXE 即可，不需要安装，也不需要额外的 `_internal/` 目录。
 
-> `build/` 是开发构建时的临时目录，不是给用户运行的版本。正常使用只需要 Release 压缩包或 `dist/ocr-keju/` 中的完整程序。
+> 单文件版首次启动时会把 PySide6、RapidOCR、ONNX Runtime 等运行组件解压到 Windows 临时目录，因此第一次打开可能会多等待几秒，这是正常现象。
 
 ---
 
@@ -123,7 +117,7 @@ Windows 版本的题库和设置保存在：
 └─ settings.json
 ```
 
-因此下载新版本覆盖旧程序、删除整个 `dist`、重新解压 Release 或重新构建程序，都不会删除本地题库和自己补录的题目。
+因此下载新版本替换旧 EXE、删除整个 `dist` 或重新构建程序，都不会删除本地题库和自己补录的题目。
 
 ---
 
@@ -213,6 +207,12 @@ uv run rapidocr check
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
 ```
 
+本地构建结果为单文件：
+
+```text
+dist\ocr-keju.exe
+```
+
 调试 CLI：
 
 ```powershell
@@ -222,4 +222,4 @@ uv run ocr-keju search "题目文字"
 uv run ocr-keju ocr-image .\question.png
 ```
 
-推送 `v*` 标签后，GitHub Actions 会自动构建 Windows x64 Release。
+推送 `v*` 标签后，GitHub Actions 会自动构建 Windows x64 单文件 EXE，并把 `jx3-ocr-keju-<版本>-windows-x64.exe` 直接上传到 GitHub Release。

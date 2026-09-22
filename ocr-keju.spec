@@ -22,22 +22,13 @@ pyz = PYZ(analysis.pure)
 exe = EXE(
     pyz,
     analysis.scripts,
+    analysis.binaries,
+    analysis.datas,
     [],
-    exclude_binaries=True,
     name="ocr-keju",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     console=False,
-)
-
-coll = COLLECT(
-    exe,
-    analysis.binaries,
-    analysis.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name="ocr-keju",
 )

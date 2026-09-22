@@ -48,12 +48,17 @@ try {
 
     # Preserve existing local/user-added questions before PyInstaller replaces dist.
     Copy-NewerRuntimeData -SourceDir (Join-Path $projectRoot "data") -DestinationDir $persistentData
-    Copy-NewerRuntimeData -SourceDir (Join-Path $projectRoot "dist\ocr-keju\data") -DestinationDir $persistentData
+    $legacyDistDir = Join-Path $projectRoot "dist\ocr-keju"
+    Copy-NewerRuntimeData -SourceDir (Join-Path $legacyDistDir "data") -DestinationDir $persistentData
+    if (Test-Path $legacyDistDir) {
+        Remove-Item $legacyDistDir -Recurse -Force
+        Write-Host "Removed legacy onedir output: dist\ocr-keju"
+    }
 
     uv sync --extra dev
     uv run pytest
     uv run pyinstaller --noconfirm --clean ocr-keju.spec
-    Write-Host "Build complete: dist\ocr-keju\ocr-keju.exe"
+    Write-Host "Build complete: dist\ocr-keju.exe"
     Write-Host "Persistent runtime data: $persistentData"
 }
 finally {
