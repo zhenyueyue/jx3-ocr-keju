@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import QEasingCurve, QEvent, Property, QPropertyAnimation, Qt, Signal
+from PySide6.QtGui import QColor, QCloseEvent, QFont, QMouseEvent, QPainter
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
+    QSizeGrip,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -15,6 +16,173 @@ from PySide6.QtWidgets import (
 
 from ocr_keju.capture import CaptureRegion
 from ocr_keju.pipeline import PendingQuestion, RecognitionOutcome
+
+
+class WindowControlButton(QPushButton):
+    def __init__(self, symbol: str, role: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._role = role
+        self._hover_progress = 0.0
+        self._animation = QPropertyAnimation(self, b"hoverProgress", self)
+        self._animation.setDuration(140)
+        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.setText(symbol)
+        self.setFixedSize(40, 30)
+        self.setFlat(True)
+        self.setProperty("windowControl", True)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        font = QFont("Segoe UI Symbol", 10)
+        if role == "close":
+            font.setPointSize(13)
+        self.setFont(font)
+
+    def _get_hover_progress(self) -> float:
+        return self._hover_progress
+
+    def _set_hover_progress(self, value: float) -> None:
+        self._hover_progress = value
+        self.update()
+
+    hoverProgress = Property(float, _get_hover_progress, _set_hover_progress)
+
+    def _animate_to(self, value: float) -> None:
+        self._animation.stop()
+        self._animation.setStartValue(self._hover_progress)
+        self._animation.setEndValue(value)
+        self._animation.start()
+
+    def enterEvent(self, event: QEvent) -> None:
+        self._animate_to(1.0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        self._animate_to(0.0)
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        progress = self._hover_progress
+        if self.isDown():
+            progress = 1.0
+
+        if self._role == "close":
+            hover = QColor(196, 48, 58)
+            pressed = QColor(173, 38, 48)
+        else:
+            hover = QColor(40, 48, 61)
+            pressed = QColor(48, 58, 73)
+
+        target = pressed if self.isDown() else hover
+        background = QColor(
+            target.red(),
+            target.green(),
+            target.blue(),
+            int(255 * progress),
+        )
+        if progress > 0:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(background)
+            painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 5, 5)
+
+        color = QColor(223, 229, 237)
+        if self._role == "close" and progress > 0.35:
+            color = QColor(255, 255, 255)
+        painter.setPen(color)
+        painter.setFont(self.font())
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.text())
+
+
+class TitleBar(QWidget):
+    def __init__(self, window: "MainWindow") -> None:
+        super().__init__(window)
+        self._window = window
+        self._drag_global = None
+        self._window_origin = None
+        self.setObjectName("titleBar")
+        self.setFixedHeight(52)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 8, 10, 8)
+        layout.setSpacing(9)
+
+        app_mark = QLabel("科")
+        app_mark.setObjectName("appMark")
+        app_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        app_mark.setFixedSize(28, 28)
+
+        title_block = QVBoxLayout()
+        title_block.setSpacing(0)
+        title = QLabel("科举助手")
+        title.setObjectName("windowTitle")
+        subtitle = QLabel("JX3 OCR")
+        subtitle.setObjectName("windowSubtitle")
+        title_block.addWidget(title)
+        title_block.addWidget(subtitle)
+
+        self.state_label = QLabel("实时检测")
+        self.state_label.setObjectName("stateBadge")
+        self.state_label.setProperty("state", "idle")
+        self.state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.minimize_button = WindowControlButton("—", "minimize", self)
+        self.maximize_button = WindowControlButton("▢", "maximize", self)
+        self.close_button = WindowControlButton("×", "close", self)
+
+        self.minimize_button.setToolTip("最小化")
+        self.maximize_button.setToolTip("最大化")
+        self.close_button.setToolTip("关闭")
+
+        self.minimize_button.clicked.connect(window.showMinimized)
+        self.maximize_button.clicked.connect(window.toggle_maximized)
+        self.close_button.clicked.connect(window.close)
+
+        layout.addWidget(app_mark)
+        layout.addLayout(title_block)
+        layout.addStretch(1)
+        layout.addWidget(self.state_label)
+        layout.addSpacing(4)
+        layout.addWidget(self.minimize_button)
+        layout.addWidget(self.maximize_button)
+        layout.addWidget(self.close_button)
+
+    def set_maximized(self, maximized: bool) -> None:
+        self.maximize_button.setText("❐" if maximized else "▢")
+        self.maximize_button.setToolTip("还原" if maximized else "最大化")
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_global = event.globalPosition().toPoint()
+            self._window_origin = self._window.frameGeometry().topLeft()
+            handle = self._window.windowHandle()
+            if handle is not None and handle.startSystemMove():
+                self._drag_global = None
+                self._window_origin = None
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if (
+            self._drag_global is not None
+            and self._window_origin is not None
+            and event.buttons() & Qt.MouseButton.LeftButton
+            and not self._window.isMaximized()
+        ):
+            delta = event.globalPosition().toPoint() - self._drag_global
+            self._window.move(self._window_origin + delta)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        self._drag_global = None
+        self._window_origin = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._window.toggle_maximized()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -28,44 +196,38 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("OCR 科举助手")
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.resize(980, 650)
         self.setMinimumSize(860, 570)
         self._ocr_expanded = False
         self._monitor_configured = False
         self._build_ui()
         self._apply_style()
+        self._sync_window_state()
 
     def _build_ui(self) -> None:
         root = QWidget()
-        root.setObjectName("root")
+        root.setObjectName("windowFrame")
+        root.setProperty("maximized", False)
+        self._window_frame = root
         self.setCentralWidget(root)
 
-        page = QVBoxLayout(root)
-        page.setContentsMargins(22, 20, 22, 18)
-        page.setSpacing(16)
+        shell = QVBoxLayout(root)
+        shell.setContentsMargins(1, 1, 1, 1)
+        shell.setSpacing(0)
 
-        header = QHBoxLayout()
-        header.setSpacing(12)
+        self.title_bar = TitleBar(self)
+        self.header_state = self.title_bar.state_label
+        shell.addWidget(self.title_bar)
 
-        title_block = QVBoxLayout()
-        title_block.setSpacing(3)
-        title = QLabel("科举助手")
-        title.setObjectName("title")
-        subtitle = QLabel("实时识别题目，并在游戏内直接标出正确答案")
-        subtitle.setObjectName("subtitle")
-        title_block.addWidget(title)
-        title_block.addWidget(subtitle)
+        content_root = QWidget()
+        content_root.setObjectName("contentRoot")
+        shell.addWidget(content_root, 1)
 
-        header.addLayout(title_block)
-        header.addStretch(1)
-
-        self.header_state = QLabel("实时检测")
-        self.header_state.setObjectName("stateBadge")
-        self.header_state.setProperty("state", "idle")
-        self.header_state.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.addWidget(self.header_state)
-
-        page.addLayout(header)
+        page = QVBoxLayout(content_root)
+        page.setContentsMargins(22, 14, 22, 18)
+        page.setSpacing(14)
 
         body = QHBoxLayout()
         body.setSpacing(14)
@@ -251,6 +413,10 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_dot)
         status_layout.addWidget(self.status_label)
         status_layout.addStretch(1)
+        self.size_grip = QSizeGrip(status_bar)
+        self.size_grip.setObjectName("sizeGrip")
+        self.size_grip.setFixedSize(14, 14)
+        status_layout.addWidget(self.size_grip)
         page.addWidget(status_bar)
 
         self.select_button.clicked.connect(self.select_region_requested.emit)
@@ -302,21 +468,53 @@ class MainWindow(QMainWindow):
     def _apply_style(self) -> None:
         self.setStyleSheet(
             """
-            QMainWindow, QWidget#root {
+            QMainWindow {
+                background: transparent;
+            }
+            QWidget#windowFrame {
                 background: #0c0f14;
                 color: #e9edf3;
+                border: 1px solid #222b37;
+                border-radius: 9px;
                 font-family: "Microsoft YaHei UI", "Segoe UI";
                 font-size: 13px;
             }
-
-            QLabel#title {
-                color: #f7f9fc;
-                font-size: 24px;
+            QWidget#windowFrame[maximized="true"] {
+                border: none;
+                border-radius: 0px;
+            }
+            QWidget#contentRoot {
+                background: transparent;
+                border: none;
+            }
+            QWidget#titleBar {
+                background: #0f141b;
+                border: none;
+                border-bottom: 1px solid #1b232e;
+                border-top-left-radius: 9px;
+                border-top-right-radius: 9px;
+            }
+            QWidget#windowFrame[maximized="true"] QWidget#titleBar {
+                border-top-left-radius: 0px;
+                border-top-right-radius: 0px;
+            }
+            QLabel#appMark {
+                color: #ffffff;
+                background: #315fbd;
+                border: 1px solid #4272d2;
+                border-radius: 6px;
+                font-size: 14px;
                 font-weight: 700;
             }
-            QLabel#subtitle {
-                color: #7f8a9a;
-                font-size: 12px;
+            QLabel#windowTitle {
+                color: #edf1f7;
+                font-size: 13px;
+                font-weight: 650;
+            }
+            QLabel#windowSubtitle {
+                color: #667284;
+                font-size: 9px;
+                letter-spacing: 1px;
             }
             QLabel#sectionTitle {
                 color: #dce2ea;
@@ -436,6 +634,16 @@ class MainWindow(QMainWindow):
                 padding: 0 12px;
                 font-weight: 500;
             }
+            QPushButton[windowControl="true"] {
+                min-width: 40px;
+                max-width: 40px;
+                min-height: 30px;
+                max-height: 30px;
+                padding: 0px;
+                margin: 0px;
+                background: transparent;
+                border: none;
+            }
             QPushButton#primaryButton {
                 background: #3169e6;
                 color: #ffffff;
@@ -549,8 +757,30 @@ class MainWindow(QMainWindow):
                 color: #8e99a8;
                 font-size: 12px;
             }
+            QSizeGrip#sizeGrip {
+                background: transparent;
+            }
             """
         )
+
+    def toggle_maximized(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+        self._sync_window_state()
+
+    def _sync_window_state(self) -> None:
+        maximized = self.isMaximized()
+        self._window_frame.setProperty("maximized", maximized)
+        self._refresh_dynamic_style(self._window_frame)
+        self.title_bar.set_maximized(maximized)
+        self.size_grip.setVisible(not maximized)
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._sync_window_state()
 
     def set_bank_count(self, count: int) -> None:
         self.bank_value.setText(f"{count} 题")
